@@ -1,31 +1,63 @@
-/* getChar - supports standard chars AND ñ / Ñ (UTF-8 0xC3) */
+/* getChar - supports ASCII characters and Ñ / ñ only */
 void getChar()
 {
-    if ((nextChar = getc(in_fp)) != EOF)
-    {
-        if (nextChar == '\n')
-            lineNo++;
+    static int enyeContinuation = 0;
+    int c = getc(in_fp);
 
-        /* Check for UTF-8 multi-byte characters like Ñ or ñ (Lead byte 0xC3) */
-        if ((unsigned char)nextChar == 0xC3) {
-            int next_byte = getc(in_fp);
-            if (next_byte == 0x91 || next_byte == 0xB1) { /* 0x91 = Ñ, 0xB1 = ñ */
-                charClass = LETTER;
-                return;
-            } else {
-                ungetc(next_byte, in_fp);
-            }
+    if (c == EOF)
+    {
+        enyeContinuation = 0;
+        nextChar = EOF;
+        charClass = EOF;
+        return;
+    }
+
+    nextChar = c;
+
+    if (nextChar == '\n')
+        lineNo++;
+
+    /* Handle the second UTF-8 byte of Ñ / ñ */
+    if (enyeContinuation)
+    {
+        enyeContinuation = 0;
+        charClass = LETTER;
+        return;
+    }
+
+    /* Ñ = C3 91, ñ = C3 B1 */
+    if ((unsigned char)nextChar == 0xC3)
+    {
+        int following = peekChar();
+
+        if (following == 0x91 || following == 0xB1)
+        {
+            enyeContinuation = 1;
+            charClass = LETTER;
+        }
+        else
+        {
+            charClass = UNKNOWN;
         }
 
-        if (isalpha(nextChar))
-            charClass = LETTER;
-        else if (isdigit(nextChar))
-            charClass = DIGIT;
-        else
-            charClass = UNKNOWN;
+        return;
+    }
+
+    /* ASCII letters only */
+    if ((nextChar >= 'A' && nextChar <= 'Z') ||
+        (nextChar >= 'a' && nextChar <= 'z'))
+    {
+        charClass = LETTER;
+    }
+    /* ASCII digits only */
+    else if (nextChar >= '0' && nextChar <= '9')
+    {
+        charClass = DIGIT;
     }
     else
-        charClass = EOF;
+    {
+        charClass = UNKNOWN;
+    }
 }
 /*****************************************************/
 void getNonBlank() {
@@ -257,10 +289,18 @@ int lex()
         else
             nextToken = INT_LIT;
         break;
-    case UNKNOWN:
-        lookup(nextChar);
-        getChar();
-        break;
+case UNKNOWN:
+    if ((unsigned char)nextChar >= 0x80)
+    {
+        fprintf(stderr,
+                "Lexical error: unsupported non-ASCII character at line %d\n",
+                lineNo);
+        exit(1);
+    }
+
+    lookup((char)nextChar);
+    getChar();
+    break;
     case EOF:
         if (line_has_token)
         {
