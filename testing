@@ -1,662 +1,68 @@
-#include <stdio.h>
-#include <ctype.h>
-#include <string.h>
-
-/* Global declarations */
-/* Variables */
-int charClass;
-char lexeme[1024];
-char nextChar;
-int lexLen;
-int token;
-int nextToken;
-FILE *in_fp, *fopen(const char *filename, const char *mode);
-int indent_stack[100] = {0};
-int indent_top = 0;
-int pending_dedents = 0;
-int is_at_line_start = 1;
-int line_has_token = 0;
-/* Function declarations */
-void addChar();
-void getChar();
-void getNonBlank();
-int peekChar();
-int lex();
-int keyword_lookup();
-void pushBracket(char open);
-void popBracket(char close);
-void checkUnclosed();
-/* Bracket matching and line tracking */
-#define MAX_BRACKET_DEPTH 100
-char bracketStack[MAX_BRACKET_DEPTH];
-int bracketLine[MAX_BRACKET_DEPTH];
-int bracketTop = 0;
-int lineNo = 1;
-/* Character classes */
-#define LETTER 0
-#define DIGIT 1
-#define UNKNOWN 99
-/* Token codes */
-#define INT_LIT 10
-#define IDENT 11
-#define NOISE_WORD 13
-#define ASSIGN_OP 20
-#define ADD_OP 21
-#define SUB_OP 22
-#define MULT_OP 23
-#define DIV_OP 24
-#define LEFT_PAREN 25
-#define RIGHT_PAREN 26
-/* New arithmetic operator tokens */
-#define EXP_OP 27       /* **  */
-#define MOD_OP 28       /* %   */
-#define FLOOR_DIV_OP 29 /* //  */
-/* New boolean operator tokens */
-#define EQ_OP 30  /* == */
-#define NEQ_OP 31 /* != */
-#define LT_OP 32  /* <  */
-#define GT_OP 33  /* >  */
-#define LE_OP 34  /* <= */
-#define GE_OP 35  /* >= */
-/* [EXPR] Logical operator tokens */
-#define AT_OP 36    /* at    */
-#define O_OP 37     /* o     */
-#define HINDI_OP 38 /* hindi */
-/* [EXPR] Literal tokens (primary expressions) */
-#define TRUE_LIT 39   /* Totoo            */
-#define FALSE_LIT 40  /* Palso            */
-#define FLOAT_LIT 41  /* 10.5             */
-#define STRING_LIT 42 /* "text" or 'text' */
-/* [EXPR] Index brackets, e.g. "computer"[0] */
-#define LEFT_BRACKET 43  /* [ */
-#define RIGHT_BRACKET 44 /* ] */
-/* [STMT] Statement keyword tokens */
-#define KW_KUNG 45      /* kung     */
-#define KW_KUNDIKUNG 46 /* kundikung */
-#define KW_KUNDI 47     /* kundi     */
-#define KW_BAWAT 48     /* bawat     */
-#define KW_SA 49        /* sa        */
-/* [STMT] Declaration keyword tokens */
-#define TYPE_NUM 50   /* num   */
-#define TYPE_TUL 51   /* tul   */
-#define TYPE_BAKA 52  /* baka  */
-#define TYPE_KAR 53   /* kar   */
-#define TYPE_PISI 54  /* pisi  */
-#define TYPE_LISTA 55 /* lista */
-/* [STMT] Input / output keyword tokens */
-#define IO_SULAT 56   /* sulat   */
-#define IO_SULATLN 57 /* sulatln */
-#define IO_KUNIN 58   /* kunin   */
-/* [STMT] Delimiters used by statements */
-#define COLON 59 /* : */
-#define COMMA 60 /* , */
-/* [LAYOUT] Blank space / off-side rule tokens */
-#define TOKEN_NEWLINE 61
-#define TOKEN_INDENT 62
-#define TOKEN_DEDENT 63
-#define TOKEN_ERROR 64
-#define MAX_INDENT_DEPTH 100
-/* [DELIM] Brace tokens for the mapped collection (dictionaries and sets) */
-#define LEFT_BRACE 65  /* { */
-#define RIGHT_BRACE 66 /* } */
-/******************************************************/
-/* main driver */
-int main()
-{
-    /* Open the input data file and process its contents */
-    if ((in_fp = fopen("front.in", "r")) == NULL)
-        printf("ERROR - cannot open front.in \n");
-    else
-    {
-        getChar();
-        do
-        {
-            lex();
-        } while (nextToken != EOF);
-        checkUnclosed(); /* report any bracket that never closed */
-    }
-    return 0;
-}
 /*****************************************************/
-/* peekChar - look at the next character in the input
-without consuming it (needed for two-character operators) */
-int peekChar()
-{
-    int c = getc(in_fp);
-    if (c != EOF)
-        ungetc(c, in_fp);
-    return c;
-}
-/*****************************************************/
-/* lookup - a function to lookup operators and parentheses
-and return the token */
-int lookup(char ch)
-{
-    switch (ch)
-    {
-    case '(':
-        addChar();
-        pushBracket('(');
-        nextToken = LEFT_PAREN;
-        break;
-    case ')':
-        addChar();
-        popBracket(')');
-        nextToken = RIGHT_PAREN;
-        break;
-    case '+':
-        addChar();
-        nextToken = ADD_OP;
-        break;
-    case '-':
-        addChar();
-        nextToken = SUB_OP;
-        break;
-    case '*':
-        addChar();
-        if (peekChar() == '*') /* ** */
-        {
-            getChar();
-            addChar();
-            nextToken = EXP_OP;
-        }
-        else
-            nextToken = MULT_OP;
-        break;
-    case '/':
-        addChar();
-        if (peekChar() == '/') /* // */
-        {
-            getChar();
-            addChar();
-            nextToken = FLOOR_DIV_OP;
-        }
-        else
-            nextToken = DIV_OP;
-        break;
-    case '%':
-        addChar();
-        nextToken = MOD_OP;
-        break;
-    case '=':
-        addChar();
-        if (peekChar() == '=') /* == */
-        {
-            getChar();
-            addChar();
-            nextToken = EQ_OP;
-        }
-        else
-            nextToken = ASSIGN_OP;
-        break;
-    case '!':
-        addChar();
-        if (peekChar() == '=') /* != */
-        {
-            getChar();
-            addChar();
-            nextToken = NEQ_OP;
-        }
-        else
-            nextToken = EOF;
-        break;
-    case '<':
-        addChar();
-        if (peekChar() == '=') /* <= */
-        {
-            getChar();
-            addChar();
-            nextToken = LE_OP;
-        }
-        else
-            nextToken = LT_OP;
-        break;
-    case '>':
-        addChar();
-        if (peekChar() == '=') /* >= */
-        {
-            getChar();
-            addChar();
-            nextToken = GE_OP;
-        }
-        else
-            nextToken = GT_OP;
-        break;
-    case ':':
-        addChar();
-        nextToken = COLON;
-        break;
-    case ',':
-        addChar();
-        nextToken = COMMA;
-        break;
-    case '[':
-        addChar();
-        pushBracket('[');
-        nextToken = LEFT_BRACKET;
-        break;
-    case ']':
-        addChar();
-        popBracket(']');
-        nextToken = RIGHT_BRACKET;
-        break;
-    case '{':
-        addChar();
-        pushBracket('{');
-        nextToken = LEFT_BRACE;
-        break;
-    case '}':
-        addChar();
-        popBracket('}');
-        nextToken = RIGHT_BRACE;
-        break;
-    case '"': 
-    case '\'':
-        lexeme[0] = 0; 
-        getChar(); 
-        while (charClass != EOF && nextChar != ch && nextChar != '\n')
-        {
-            addChar();
-            getChar();
-        }
-        if (nextChar == ch)
-            nextToken = STRING_LIT;
-        else
-        {
-            printf("Error - unterminated string \n");
-            nextToken = EOF;
-        }
-        break;
-    default:
-        addChar();
-        nextToken = EOF;
-        break;
-    }
-    return nextToken;
-}
-/*****************************************************/
-/* addChar - a function to add nextChar to lexeme */
-void addChar()
-{
-    if (lexLen <= 98)
-    {
-        lexeme[lexLen++] = nextChar;
-        lexeme[lexLen] = 0;
-    }
-    else
-        printf("Error - lexeme is too long \n");
-}
-/*****************************************************/
-void pushBracket(char open)
-{
-    if (bracketTop < MAX_BRACKET_DEPTH)
-    {
-        bracketStack[bracketTop] = open;
-        bracketLine[bracketTop] = lineNo;
-        bracketTop++;
-    }
-    else
-        printf("Error - brackets nested too deeply \n");
-}
-/*****************************************************/
-void popBracket(char close)
-{
-    char open;
-
-    if (bracketTop == 0)
-    {
-        printf("Error - '%c' on line %d has no matching opening bracket \n",
-               close, lineNo);
-        return;
-    }
-    bracketTop--;
-    open = bracketStack[bracketTop];
-    if ((open == '(' && close != ')') ||
-        (open == '[' && close != ']') ||
-        (open == '{' && close != '}'))
-        printf("Error - '%c' on line %d does not match '%c' from line %d \n",
-               close, lineNo, open, bracketLine[bracketTop]);
-}
-/*****************************************************/
-void checkUnclosed()
-{
-    while (bracketTop > 0)
-    {
-        bracketTop--;
-        printf("Error - '%c' from line %d is never closed \n",
-               bracketStack[bracketTop], bracketLine[bracketTop]);
-    }
-}
-/*****************************************************/
-/* getChar - supports standard chars AND ñ / Ñ (UTF-8 0xC3) */
-void getChar()
-{
-    if ((nextChar = getc(in_fp)) != EOF)
-    {
-        if (nextChar == '\n')
-            lineNo++;
-
-        /* Check for UTF-8 multi-byte characters like Ñ or ñ (Lead byte 0xC3) */
-        if ((unsigned char)nextChar == 0xC3) {
-            int next_byte = getc(in_fp);
-            if (next_byte == 0x91 || next_byte == 0xB1) { /* 0x91 = Ñ, 0xB1 = ñ */
-                charClass = LETTER;
-                return;
-            } else {
-                ungetc(next_byte, in_fp);
-            }
-        }
-
-        if (isalpha(nextChar))
-            charClass = LETTER;
-        else if (isdigit(nextChar))
-            charClass = DIGIT;
-        else
-            charClass = UNKNOWN;
-    }
-    else
-        charClass = EOF;
-}
-/*****************************************************/
-void getNonBlank() {
-    while (isspace(nextChar) || nextChar == '#'){
-        if (isspace(nextChar)){
-            getChar();
-        }else if (nextChar == '#'){
-            if (peekChar() == '#'){
-                getChar();
-                getChar();
-                while (nextChar != EOF){
-                    if (nextChar == '#' && peekChar() == '#'){
-                        getChar(); getChar();
-                        break;
-                    }
-                    getChar();
-                }
-            }else{
-                while (nextChar != EOF && nextChar != '\n'){
-                    getChar();
-                }
-            }
-        }
-    }
-}
-
-/*****************************************************/
-int lex()
-{
-    lexLen = 0;
-    lexeme[0] = '\0';
-
-    if (pending_dedents > 0)
-    {
-        pending_dedents--;
-        nextToken = TOKEN_DEDENT;
-        snprintf(lexeme, sizeof lexeme, "DEDENT");
-        printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-        return nextToken;
-    }
-
-    for (;;)
-    {
-        if (is_at_line_start)
-        {
-            int space_count = 0;
-
-            while (nextChar == ' ' || nextChar == '\t')
-            {
-                space_count += (nextChar == '\t') ? 4 : 1;
-                getChar();
-            }
-
-            if (nextChar == '\n' || (nextChar == '\r' && peekChar() == '\n'))
-            {
-                getChar();
-                if (nextChar == '\n')
-                    getChar();
-                continue;
-            }
-
-            if (nextChar == '#')
-            {
-                if (peekChar() == '#')
-                {
-                    getChar();
-                    getChar();
-                    while (charClass != EOF)
-                    {
-                        if (nextChar == '#' && peekChar() == '#')
-                        {
-                            getChar();
-                            getChar();
-                            break;
-                        }
-                        if (nextChar == '\n')
-                        {
-                            is_at_line_start = 1;
-                            line_has_token = 0;
-                        }
-                        getChar();
-                    }
-                    if (is_at_line_start)
-                        continue;
-                }
-                else
-                {
-                    while (charClass != EOF && nextChar != '\n')
-                        getChar();
-                    if (nextChar == '\n')
-                        getChar();
-                    continue;
-                }
-            }
-
-            if (charClass == EOF)
-            {
-                if (indent_top > 0)
-                {
-                    pending_dedents = indent_top - 1;
-                    indent_top = 0;
-                    nextToken = TOKEN_DEDENT;
-                    snprintf(lexeme, sizeof lexeme, "DEDENT");
-                    printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                    return nextToken;
-                }
-                nextToken = EOF;
-                strcpy(lexeme, "EOF");
-                printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                return nextToken;
-            }
-
-            is_at_line_start = 0;
-            if (space_count > indent_stack[indent_top])
-            {
-                if (indent_top >= MAX_INDENT_DEPTH - 1)
-                {
-                    printf("Error: Indentation too deep.\n");
-                    nextToken = TOKEN_ERROR;
-                    strcpy(lexeme, "ERROR");
-                    printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                    return nextToken;
-                }
-                indent_stack[++indent_top] = space_count;
-                nextToken = TOKEN_INDENT;
-                strcpy(lexeme, "INDENT");
-                printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                return nextToken;
-            }
-            if (space_count < indent_stack[indent_top])
-            {
-                while (indent_top > 0 && space_count < indent_stack[indent_top])
-                {
-                    indent_top--;
-                    pending_dedents++;
-                }
-                if (space_count != indent_stack[indent_top])
-                {
-                    printf("Error: Unindent does not match any outer indentation level.\n");
-                    nextToken = TOKEN_ERROR;
-                    strcpy(lexeme, "ERROR");
-                    printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                    return nextToken;
-                }
-                pending_dedents--;
-                nextToken = TOKEN_DEDENT;
-                strcpy(lexeme, "DEDENT");
-                printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                return nextToken;
-            }
-        }
-
-        if (nextChar == '#')
-        {
-            if (peekChar() == '#')
-            {
-                getChar();
-                getChar();
-                while (charClass != EOF)
-                {
-                    if (nextChar == '#' && peekChar() == '#')
-                    {
-                        getChar();
-                        getChar();
-                        break;
-                    }
-                    if (nextChar == '\n' && bracketTop == 0)
-                    {
-                        is_at_line_start = 1;
-                        line_has_token = 0;
-                    }
-                    getChar();
-                }
-                continue;
-            }
-            while (charClass != EOF && nextChar != '\n')
-                getChar();
-            continue;
-        }
-
-        if (isspace((unsigned char)nextChar))
-        {
-            if (nextChar == '\n')
-            {
-                getChar();
-                if (bracketTop > 0)
-                    continue;
-                is_at_line_start = 1;
-                if (line_has_token)
-                {
-                    line_has_token = 0;
-                    nextToken = TOKEN_NEWLINE;
-                    strcpy(lexeme, "NEWLINE");
-                    printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-                    return nextToken;
-                }
-                continue;
-            }
-            getChar();
-            continue;
-        }
-        break;
-    }
-
-    switch (charClass)
-    {
-    case LETTER:
-        nextToken = keyword_lookup();
-        break;
-    case DIGIT:
-        addChar();
-        getChar();
-        while (charClass == DIGIT)
-        {
-            addChar();
-            getChar();
-        }
-        if (nextChar == '.' && isdigit(peekChar()))
-        {
-            addChar();
-            getChar();
-            while (charClass == DIGIT)
-            {
-                addChar();
-                getChar();
-            }
-            nextToken = FLOAT_LIT;
-        }
-        else
-            nextToken = INT_LIT;
-        break;
-    case UNKNOWN:
-        lookup(nextChar);
-        getChar();
-        break;
-    case EOF:
-        if (line_has_token)
-        {
-            line_has_token = 0;
-            nextToken = TOKEN_NEWLINE;
-            strcpy(lexeme, "NEWLINE");
-            printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-            return nextToken;
-        }
-        if (indent_top > 0)
-        {
-            pending_dedents = indent_top - 1;
-            indent_top = 0;
-            nextToken = TOKEN_DEDENT;
-            strcpy(lexeme, "DEDENT");
-            printf("Next token is: %d, Next lexeme is %s\n", nextToken, lexeme);
-            return nextToken;
-        }
-        nextToken = EOF;
-        strcpy(lexeme, "EOF");
-        break;
-    }
-    if (nextToken != EOF)
-        line_has_token = 1;
-    printf("Next token is: %d, Next lexeme is %s\n",
-           nextToken, lexeme);
-    return nextToken;
-}
-
-/*****************************************************/
-/* keyword_lookup - handles keywords, noise words, identifiers, and ng variations */
+/* keyword_lookup - a function to lookup keywords,
+   noise words, and identifiers using a DFA state machine */
 int keyword_lookup()
 {
-    int state = 0;
+    int state = 0; /* State 0: Start state*/
     
     addChar();
 
     switch (tolower(nextChar)) {
-        case 'a': state = 1; break;
-        case 'o': state = 6; break;
-        case 'h': state = 7; break;
-        case 't': state = 12; break;
-        case 'p': state = 17; break;
-        case 'b': state = 22; break;
-        case 'k': state = 29; break;
-        case 'l': state = 43; break;
-        case 'n': state = 48; break;
-        case 's': state = 55; break;
-        default:  state = 99; break;
+        case 'a': 
+            state = 1; 
+            break;
+        case 'o': /* [EXPR] 'o' */
+            state = 6;
+            break;
+        case 'h': /* [EXPR] start of 'hindi' */
+            state = 7;
+            break;
+        case 't': /* [EXPR] start of 'Totoo' or [STMT] 'tul' */
+            state = 12; // Will be handled or differentiated in transition
+            break;
+        case 'p': /* [EXPR] start of 'Palso' */
+            state = 17;
+            break;
+        case 'b': /* [STMT] start of 'b...' */
+            state = 22;
+            break;
+        case 'k': /* [STMT] start of 'k...' */
+            state = 29;
+            break;
+        case 'l': /* [STMT] start of 'l...' */
+            state = 43;
+            break;
+        case 'n': /* [STMT] start of 'n...' or 'ng' */
+            state = 48;
+            break;
+        case 's': /* [STMT] start of 's...' */
+            state = 55;
+            break;
+        default:  
+            state = 99; //sink state for identifiers
+            break;
     }
+    
     getChar();
     
+    /* Consume characters and transition states */
     while (charClass == LETTER || charClass == DIGIT || nextChar == '_'){
         addChar();
         
         switch (state){
             case 1:
-                if (tolower(nextChar) == 'y') state = 2;
-                else if (tolower(nextChar) == 'n') state = 3;
-                else if (tolower(nextChar) == 't') state = 5;
+                if (tolower(nextChar) == 'y') state = 2; //'ay'
+                else if (tolower(nextChar) == 'n') state = 3; // 'an'
+                else if (tolower(nextChar) == 't') state = 5; // [EXPR] 'at'
                 else state = 99;
                 break;
-            case 3:
-                if (tolower(nextChar) == 'g') state = 4;
+            
+            case 3: // 'an'
+                if (tolower(nextChar) == 'g') state = 4; //'ang'
                 else state = 99;
                 break;
+            
+            /* [EXPR] states 7-11: h-i-n-d-i, state 11 = 'hindi' */
             case 7:
                 if (tolower(nextChar) == 'i') state = 8;
                 else state = 99;
@@ -673,9 +79,11 @@ int keyword_lookup()
                 if (tolower(nextChar) == 'i') state = 11;
                 else state = 99;
                 break;
+
+            /* [EXPR] states 12-16: T-o-t-o-o, state 16 = 'Totoo' */
             case 12:
                 if (tolower(nextChar) == 'o') state = 13;
-                else if (tolower(nextChar) == 'u') state = 64;
+                else if (tolower(nextChar) == 'u') state = 64; // 'tul' fallback
                 else state = 99;
                 break;
             case 13:
@@ -690,9 +98,11 @@ int keyword_lookup()
                 if (tolower(nextChar) == 'o') state = 16;
                 else state = 99;
                 break;
+
+            /* [EXPR] states 17-21: P-a-l-s-o, state 21 = 'Palso' */
             case 17:
                 if (tolower(nextChar) == 'a') state = 18;
-                else if (tolower(nextChar) == 'i') state = 52;
+                else if (tolower(nextChar) == 'i') state = 52; // 'pisi' fallback
                 else state = 99;
                 break;
             case 18:
@@ -707,161 +117,243 @@ int keyword_lookup()
                 if (tolower(nextChar) == 'o') state = 21;
                 else state = 99;
                 break;
+
+            /* [STMT] state 22 = 'b' */
             case 22:
                 if (tolower(nextChar) == 'a') state = 23;
                 else state = 99;
                 break;
+
+            /* [STMT] state 23 = 'ba' */
             case 23:
                 if (tolower(nextChar) == 'k') state = 24;
                 else if (tolower(nextChar) == 'w') state = 26;
                 else state = 99;
                 break;
+
+            /* [STMT] state 24 = 'bak' */
             case 24:
                 if (tolower(nextChar) == 'a') state = 25;
                 else state = 99;
                 break;
+
+            /* [STMT] state 26 = 'baw' */
             case 26:
                 if (tolower(nextChar) == 'a') state = 27;
                 else state = 99;
                 break;
+
+            /* [STMT] state 27 = 'bawa' */
             case 27:
                 if (tolower(nextChar) == 't') state = 28;
                 else state = 99;
                 break;
+
+            /* [STMT] state 29 = 'k' */
             case 29:
                 if (tolower(nextChar) == 'a') state = 30;
                 else if (tolower(nextChar) == 'u') state = 32;
                 else state = 99;
                 break;
+
+            /* [STMT] state 30 = 'ka' */
             case 30:
                 if (tolower(nextChar) == 'r') state = 31;
                 else state = 99;
                 break;
+
+            /* [STMT] state 32 = 'ku' */
             case 32:
                 if (tolower(nextChar) == 'n') state = 33;
                 else state = 99;
                 break;
+
+            /* [STMT] state 33 = 'kun' */
             case 33:
                 if (tolower(nextChar) == 'd') state = 34;
                 else if (tolower(nextChar) == 'g') state = 40;
                 else if (tolower(nextChar) == 'i') state = 41;
                 else state = 99;
                 break;
+
+            /* [STMT] state 34 = 'kund' */
             case 34:
                 if (tolower(nextChar) == 'i') state = 35;
                 else state = 99;
                 break;
+
+            /* [STMT] state 35 = 'kundi' */
             case 35:
                 if (tolower(nextChar) == 'k') state = 36;
                 else state = 99;
                 break;
+
+            /* [STMT] state 36 = 'kundik' */
             case 36:
                 if (tolower(nextChar) == 'u') state = 37;
                 else state = 99;
                 break;
+
+            /* [STMT] state 37 = 'kundiku' */
             case 37:
                 if (tolower(nextChar) == 'n') state = 38;
                 else state = 99;
                 break;
+
+            /* [STMT] state 38 = 'kundikun' */
             case 38:
                 if (tolower(nextChar) == 'g') state = 39;
                 else state = 99;
                 break;
+
+            /* [STMT] state 41 = 'kuni' */
             case 41:
                 if (tolower(nextChar) == 'n') state = 42;
                 else state = 99;
                 break;
+
+            /* [STMT] state 43 = 'l' */
             case 43:
                 if (tolower(nextChar) == 'i') state = 44;
                 else state = 99;
                 break;
+
+            /* [STMT] state 44 = 'li' */
             case 44:
                 if (tolower(nextChar) == 's') state = 45;
                 else state = 99;
                 break;
+
+            /* [STMT] state 45 = 'lis' */
             case 45:
                 if (tolower(nextChar) == 't') state = 46;
                 else state = 99;
                 break;
+
+            /* [STMT] state 46 = 'list' */
             case 46:
                 if (tolower(nextChar) == 'a') state = 47;
                 else state = 99;
                 break;
+
+            /* [STMT] state 48 = 'n' or 'N' */
             case 48:
-                if (tolower(nextChar) == 'g') state = 66; /* ng, NG, Ng, nG */
+                if (tolower(nextChar) == 'g') state = 66; /* Catches ng, NG, Ng, nG */
                 else if (tolower(nextChar) == 'u') state = 49;
                 else state = 99;
                 break;
             case 66:
                 state = 99;
                 break;
+
+            /* [STMT] state 49 = 'nu' */
             case 49:
                 if (tolower(nextChar) == 'm') state = 50;
                 else state = 99;
                 break;
+
+            /* [STMT] state 52 = 'pi' */
             case 52:
                 if (tolower(nextChar) == 's') state = 53;
                 else state = 99;
                 break;
+
+            /* [STMT] state 53 = 'pis' */
             case 53:
                 if (tolower(nextChar) == 'i') state = 54;
                 else state = 99;
                 break;
+
+            /* [STMT] state 55 = 's' */
             case 55:
                 if (tolower(nextChar) == 'a') state = 56;
                 else if (tolower(nextChar) == 'u') state = 57;
                 else state = 99;
                 break;
+
+            /* [STMT] state 57 = 'su' */
             case 57:
                 if (tolower(nextChar) == 'l') state = 58;
                 else state = 99;
                 break;
+
+            /* [STMT] state 58 = 'sul' */
             case 58:
                 if (tolower(nextChar) == 'a') state = 59;
                 else state = 99;
                 break;
+
+            /* [STMT] state 59 = 'sula' */
             case 59:
                 if (tolower(nextChar) == 't') state = 60;
                 else state = 99;
                 break;
+
+            /* [STMT] state 60 = 'sulat' */
             case 60:
                 if (tolower(nextChar) == 'l') state = 61;
                 else state = 99;
                 break;
+
+            /* [STMT] state 61 = 'sulatl' */
             case 61:
                 if (tolower(nextChar) == 'n') state = 62;
                 else state = 99;
                 break;
+
+            /* [STMT] state 64 = 'tu' */
             case 64:
                 if (tolower(nextChar) == 'l') state = 65;
                 else state = 99;
                 break;
-            default:
+
+            default: //sink state
                 state = 99; 
                 break;
         }
+        
         getChar();
     }
     
-    if (state == 5) return AT_OP;
-    if (state == 6) return O_OP;
-    if (state == 11) return HINDI_OP;
-    if (state == 16) return TRUE_LIT;
-    if (state == 21) return FALSE_LIT;
-    if (state == 25) return TYPE_BAKA;
-    if (state == 28) return KW_BAWAT;
-    if (state == 31) return TYPE_KAR;
-    if (state == 35) return KW_KUNDI;
-    if (state == 39) return KW_KUNDIKUNG;
-    if (state == 40) return KW_KUNG;
-    if (state == 42) return IO_KUNIN;
-    if (state == 47) return TYPE_LISTA;
-    if (state == 50) return TYPE_NUM;
-    if (state == 54) return TYPE_PISI;
-    if (state == 56) return KW_SA;
-    if (state == 60) return IO_SULAT;
-    if (state == 62) return IO_SULATLN;
-    if (state == 65) return TYPE_TUL;
+    /* Return the correct token based on the final state reached */
+    if (state == 5)
+        return AT_OP;     /* at    */
+    if (state == 6)
+        return O_OP;      /* o     */
+    if (state == 11)
+        return HINDI_OP;  /* hindi */
+    if (state == 16)
+        return TRUE_LIT;  /* Totoo */
+    if (state == 21)
+        return FALSE_LIT; /* Palso */
+    if (state == 25)
+        return TYPE_BAKA; /* baka */
+    if (state == 28)
+        return KW_BAWAT; /* bawat */
+    if (state == 31)
+        return TYPE_KAR; /* kar */
+    if (state == 35)
+        return KW_KUNDI; /* kundi */
+    if (state == 39)
+        return KW_KUNDIKUNG; /* kundikung */
+    if (state == 40)
+        return KW_KUNG; /* kung */
+    if (state == 42)
+        return IO_KUNIN; /* kunin */
+    if (state == 47)
+        return TYPE_LISTA; /* lista */
+    if (state == 50)
+        return TYPE_NUM; /* num */
+    if (state == 54)
+        return TYPE_PISI; /* pisi */
+    if (state == 56)
+        return KW_SA; /* sa */
+    if (state == 60)
+        return IO_SULAT; /* sulat */
+    if (state == 62)
+        return IO_SULATLN; /* sulatln */
+    if (state == 65)
+        return TYPE_TUL; /* tul */
         
     if (state == 2 || state == 4 || state == 66) {
         return NOISE_WORD;
